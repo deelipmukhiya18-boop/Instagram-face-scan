@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Block all unencrypted HTTP traffic globally; enforce HTTPS only -->
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <!-- Explicitly allow HTTPS only to official trusted domains (Instagram, Meta AI, Google, OpenStreetMap) -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">instagram.com</domain>
+        <domain includeSubdomains="true">meta.ai</domain>
+        <domain includeSubdomains="true">google.com</domain>
+        <domain includeSubdomains="true">openstreetmap.org</domain>
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </domain-config>
+</network-security-config>

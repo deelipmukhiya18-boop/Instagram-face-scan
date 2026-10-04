@@ -1,0 +1,6 @@
+{
+  "name": "InstaLens ML",
+  "description": "Public visual clue extractor, manual Instagram username finder, and official Instagram & public web search assistant.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
