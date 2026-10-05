@@ -5,6 +5,9 @@ on:
     branches: [ "main", "master" ]
   workflow_dispatch:
 
+env:
+  JAVA_TOOL_OPTIONS: "-Djava.awt.headless=true"
+
 jobs:
   build-apk:
     runs-on: ubuntu-latest
@@ -19,11 +22,31 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      - name: Prepare debug.keystore and .env for CI Build
+        run: |
+          if [ -f "debug.keystore.base64" ]; then
+            tr -d '\r\n ' < debug.keystore.base64 | base64 -d > debug.keystore
+          fi
+          if [ ! -s "debug.keystore" ]; then
+            keytool -genkeypair -v \
+              -keystore debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          if [ ! -f ".env" ] && [ -f ".env.example" ]; then
+            cp .env.example .env
+          fi
+
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
       - name: Build Debug APK
-        run: gradle assembleDebug
+        run: gradle assembleDebug --no-daemon
 
       - name: Upload APK Artifact for Download
         uses: actions/upload-artifact@v4
