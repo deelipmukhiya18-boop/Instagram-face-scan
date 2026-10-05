@@ -23,9 +23,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Explore
+import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.GpsFixed
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material3.AssistChip
@@ -35,6 +38,8 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -55,6 +60,7 @@ import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.network.CandidateProfileLink
 import com.example.network.MlAndInstagramApiClient
+import com.example.network.ProfileGenderFilter
 import com.example.ui.LocationDiscoveryUiState
 import com.example.ui.theme.InstaCyan
 import com.example.ui.theme.InstaMagenta
@@ -67,6 +73,7 @@ import java.util.Locale
 fun LocationSearchScreen(
     locationState: LocationDiscoveryUiState,
     onUpdateAreaInput: (String) -> Unit,
+    onSelectGenderFilter: (ProfileGenderFilter) -> Unit,
     onEnableAndDiscoverLocation: (String) -> Unit,
     onDisableLocation: () -> Unit,
     onSaveCandidateLink: (CandidateProfileLink) -> Unit,
@@ -77,17 +84,16 @@ fun LocationSearchScreen(
     val locationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { _ ->
-        // Whether GPS permission is granted or fallback area is used, run discovery immediately
         onEnableAndDiscoverLocation(locationState.areaFilterInput)
     }
 
     val quickAreas = listOf(
         "Patna, Bihar",
         "Darbhanga, Bihar",
+        "Madhubani, Bihar",
         "New Delhi",
         "Mumbai",
-        "Lucknow, UP",
-        "Jaipur, Rajasthan"
+        "Lucknow, UP"
     )
 
     Column(
@@ -104,17 +110,17 @@ fun LocationSearchScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             Text(
-                text = "Nearby Location → Area Instagram IDs",
+                text = "Location → Real Boys & Girls Instagram IDs",
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold
             )
             Text(
-                text = "लोकेशन चालू (ON) करते ही उस एरिया के सार्वजनिक Instagram IDs, लोकल क्रिएटर्स, सिटी पेज और लोकेशन फीड अपने आप खुल जाएंगे।",
+                text = "अपनी पसंद चुनें (लड़के / लड़कियाँ / सभी) और लोकेशन चालू करें या शहर का नाम डालें — उस लोकेशन के असली लोगों के पब्लिक Instagram IDs दिखेंगे।",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            // 1. Live GPS Location Toggle & Radar Control Card
+            // 1. Boys / Girls / All Preference Filter + GPS Control Card
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -138,6 +144,55 @@ fun LocationSearchScreen(
                         .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
+                    // Preference Selector: Boys / Girls / All
+                    Text(
+                        text = "1. किसकी Instagram ID खोजनी है? (पसंद चुनें):",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = InstaCyan
+                    )
+
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        ProfileGenderFilter.entries.forEach { filter ->
+                            val selected = locationState.selectedGenderFilter == filter
+                            FilterChip(
+                                selected = selected,
+                                onClick = { onSelectGenderFilter(filter) },
+                                label = {
+                                    Text(
+                                        text = filter.labelHindi,
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                                    )
+                                },
+                                leadingIcon = {
+                                    val icon = when (filter) {
+                                        ProfileGenderFilter.ALL -> Icons.Default.People
+                                        ProfileGenderFilter.BOYS -> Icons.Default.Person
+                                        ProfileGenderFilter.GIRLS -> Icons.Default.Face
+                                    }
+                                    Icon(
+                                        imageVector = icon,
+                                        contentDescription = filter.labelHindi,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = InstaMagenta.copy(alpha = 0.25f),
+                                    selectedLabelColor = InstaCyan,
+                                    selectedLeadingIconColor = InstaMagenta
+                                ),
+                                modifier = Modifier.testTag("gender_filter_chip_${filter.id}")
+                            )
+                        }
+                    }
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+
+                    // GPS Location Switch
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -157,16 +212,16 @@ fun LocationSearchScreen(
                             Column {
                                 Text(
                                     text = if (locationState.isLocationEnabled) {
-                                        "Location Tracking: ON (एरिया Instagram IDs एक्टिव)"
+                                        "Live Location: ON (${locationState.selectedGenderFilter.labelHindi})"
                                     } else {
-                                        "Location Tracking: OFF (लोकेशन चालू करें)"
+                                        "Live Location: OFF (लोकेशन चालू करें)"
                                     },
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold,
                                     color = if (locationState.isLocationEnabled) MatchGreen else MaterialTheme.colorScheme.onSurface
                                 )
                                 Text(
-                                    text = "चालू करते ही आपके एरिया के पब्लिक Instagram अकाउंट अपने आप दिखेंगे",
+                                    text = "API Key के ज़रिए आपके एरिया के असली प्रोफाइल खोजे जाते हैं",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -213,7 +268,7 @@ fun LocationSearchScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "लोकेशन चालू करें और एरिया के Instagram ID खोजें",
+                            text = "लोकेशन से ${locationState.selectedGenderFilter.labelHindi} की असली ID खोजें",
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -222,7 +277,7 @@ fun LocationSearchScreen(
 
                     // Custom Area / City / District Input
                     Text(
-                        text = "या किसी भी शहर / गाँव / एरिया का नाम डालकर वहाँ के Instagram IDs देखें:",
+                        text = "2. या किसी भी शहर / गाँव / लोकेशन का नाम लिखकर वहाँ के लड़के-लड़कियों की ID खोजें:",
                         style = MaterialTheme.typography.labelLarge,
                         color = InstaCyan
                     )
@@ -235,7 +290,7 @@ fun LocationSearchScreen(
                         OutlinedTextField(
                             value = locationState.areaFilterInput,
                             onValueChange = onUpdateAreaInput,
-                            label = { Text("शहर / जिला / एरिया (e.g. Patna, Darbhanga, Delhi)") },
+                            label = { Text("लोकेशन / शहर डालें (e.g. Darbhanga, Patna, Delhi)") },
                             singleLine = true,
                             modifier = Modifier
                                 .weight(1f)
@@ -317,12 +372,11 @@ fun LocationSearchScreen(
                 }
             }
 
-            // Automatically Displayed Area Instagram Info & Candidate Profiles
+            // Automatically Displayed Real Individual Instagram IDs for the Location
             val info = locationState.detectedLocationInfo
             AnimatedVisibility(visible = info != null && locationState.isLocationEnabled) {
                 if (info != null) {
                     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                        // Detected Area Summary + Official Instagram Location Map Button
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -336,39 +390,36 @@ fun LocationSearchScreen(
                                     .padding(16.dp),
                                 verticalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = "📍 Detected Area: ${info.displayAddress}",
-                                            style = MaterialTheme.typography.titleLarge,
-                                            fontWeight = FontWeight.ExtraBold,
-                                            color = MatchGreen
-                                        )
-                                        if (info.latitude != null && info.longitude != null) {
-                                            Text(
-                                                text = String.format(
-                                                    Locale.US,
-                                                    "GPS Coordinates: %.4f° N, %.4f° E",
-                                                    info.latitude,
-                                                    info.longitude
-                                                ),
-                                                style = MaterialTheme.typography.labelSmall,
-                                                fontFamily = FontFamily.Monospace,
-                                                color = InstaCyan
-                                            )
-                                        }
-                                    }
+                                Text(
+                                    text = "📍 ${info.displayAddress} • ${info.genderFilter.labelHindi}",
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = MatchGreen
+                                )
+                                if (info.latitude != null && info.longitude != null) {
+                                    Text(
+                                        text = String.format(
+                                            Locale.US,
+                                            "GPS Coordinates: %.4f° N, %.4f° E",
+                                            info.latitude,
+                                            info.longitude
+                                        ),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = InstaCyan
+                                    )
                                 }
 
                                 Button(
                                     onClick = {
+                                        val query = when (info.genderFilter) {
+                                            ProfileGenderFilter.BOYS -> "${info.displayAddress} boys"
+                                            ProfileGenderFilter.GIRLS -> "${info.displayAddress} girls"
+                                            ProfileGenderFilter.ALL -> info.displayAddress
+                                        }
                                         MlAndInstagramApiClient.openInstagramLocationExplore(
                                             context,
-                                            info.displayAddress
+                                            query
                                         )
                                     },
                                     modifier = Modifier
@@ -381,14 +432,14 @@ fun LocationSearchScreen(
                                     Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null)
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
-                                        text = "Instagram पर '${info.displayAddress}' के सभी लोकेशन पोस्ट खोलें",
+                                        text = "Instagram पर '${info.displayAddress}' (${info.genderFilter.labelHindi}) खोलें",
                                         fontWeight = FontWeight.Bold
                                     )
                                 }
 
                                 if (info.areaHashtags.isNotEmpty()) {
                                     Text(
-                                        text = "इस एरिया के लाइव Instagram Hashtags (टैप करके खोलें):",
+                                        text = "इस लोकेशन के लाइव Hashtags:",
                                         style = MaterialTheme.typography.labelLarge,
                                         color = InstaCyan
                                     )
@@ -417,10 +468,9 @@ fun LocationSearchScreen(
                             }
                         }
 
-                        // Automatic List of Area Public Instagram IDs
                         CandidateLinksSection(
                             context = context,
-                            title = "इस लोकेशन/एरिया के सार्वजनिक Instagram IDs (${info.areaCandidateLinks.size})",
+                            title = "${info.displayAddress} (${info.genderFilter.labelHindi}) के असली पब्लिक Instagram प्रोफाइल (${info.areaCandidateLinks.size})",
                             candidates = info.areaCandidateLinks,
                             onSaveCandidate = onSaveCandidateLink
                         )

@@ -22,6 +22,9 @@ object SecurityShield {
         "www.meta.ai",
         "google.com",
         "www.google.com",
+        "duckduckgo.com",
+        "html.duckduckgo.com",
+        "generativelanguage.googleapis.com",
         "nominatim.openstreetmap.org"
     )
 

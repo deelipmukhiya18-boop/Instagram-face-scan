@@ -23,6 +23,7 @@ import com.example.data.local.SearchHistoryEntity
 import com.example.network.AreaLocationInfo
 import com.example.network.CandidateProfileLink
 import com.example.network.MlAndInstagramApiClient
+import com.example.network.ProfileGenderFilter
 import com.example.network.PublicPhotoClueResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -40,7 +41,7 @@ data class PhotoClueUiState(
     val isAnalyzing: Boolean = false,
     val clueResult: PublicPhotoClueResult? = null,
     val userAddedClueInput: String = "",
-    val statusMessage: String = "फोटो अपलोड करें — ऐप फोटो से जुड़े सार्वजनिक संकेत, पब्लिक क्रिएटर या आपके सेव किए गए फोटो इंडेक्स से Instagram ID खोजेगा।",
+    val statusMessage: String = "फोटो अपलोड करें — ऐप API Key और सार्वजनिक संकेतों से असली Instagram ID खोजेगा।",
     val errorMessage: String? = null
 )
 
@@ -55,8 +56,9 @@ data class LocationDiscoveryUiState(
     val isLocationEnabled: Boolean = false,
     val isTracking: Boolean = false,
     val areaFilterInput: String = "",
+    val selectedGenderFilter: ProfileGenderFilter = ProfileGenderFilter.ALL,
     val detectedLocationInfo: AreaLocationInfo? = null,
-    val statusMessage: String = "लोकेशन चालू (Turn ON) करते ही आपके एरिया के सभी सार्वजनिक Instagram IDs, लोकल पेज और लोकेशन टैग अपने आप दिख जाएंगे।"
+    val statusMessage: String = "लोकेशन चालू करते ही या शहर का नाम डालते ही वहाँ के लड़के/लड़कियों के असली पब्लिक Instagram IDs दिखेंगे।"
 )
 
 class InstaLensViewModel(
@@ -90,12 +92,27 @@ class InstaLensViewModel(
         _locationState.update { it.copy(areaFilterInput = input) }
     }
 
+    fun updateGenderFilter(context: Context, filter: ProfileGenderFilter) {
+        _locationState.update { it.copy(selectedGenderFilter = filter) }
+        if (_locationState.value.isLocationEnabled || _locationState.value.areaFilterInput.isNotBlank()) {
+            startLocationTrackingAndDiscover(
+                context = context,
+                customAreaOverride = _locationState.value.areaFilterInput,
+                genderFilter = filter
+            )
+        }
+    }
+
     /**
      * Turns ON location tracking, reads real device GPS/Network coordinates, reverse-geocodes the area,
-     * and automatically populates all public Instagram IDs & location feeds for that area.
+     * and automatically populates real individual Instagram IDs (Boys / Girls / All) for that area.
      */
     @SuppressLint("MissingPermission")
-    fun startLocationTrackingAndDiscover(context: Context, customAreaOverride: String = "") {
+    fun startLocationTrackingAndDiscover(
+        context: Context,
+        customAreaOverride: String = "",
+        genderFilter: ProfileGenderFilter = _locationState.value.selectedGenderFilter
+    ) {
         val hasFine = ContextCompat.checkSelfPermission(
             context,
             android.Manifest.permission.ACCESS_FINE_LOCATION
@@ -109,7 +126,8 @@ class InstaLensViewModel(
             it.copy(
                 isLocationEnabled = true,
                 isTracking = true,
-                statusMessage = "GPS लोकेशन ट्रैक हो रही है और इस एरिया के Instagram IDs खोजे जा रहे हैं..."
+                selectedGenderFilter = genderFilter,
+                statusMessage = "GPS लोकेशन ट्रैक हो रही है और ${genderFilter.labelHindi} के असली Instagram IDs खोजे जा रहे हैं..."
             )
         }
 
@@ -132,7 +150,6 @@ class InstaLensViewModel(
                     }
                 }
 
-                // Also register a single one-shot listener in case a fresher fix arrives
                 val activeProvider = when {
                     locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
                     locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
@@ -146,7 +163,8 @@ class InstaLensViewModel(
                                 context = context,
                                 lat = location.latitude,
                                 lon = location.longitude,
-                                areaOverride = customAreaOverride
+                                areaOverride = customAreaOverride,
+                                genderFilter = genderFilter
                             )
                         }
                         @Deprecated("Deprecated in Java")
@@ -166,7 +184,6 @@ class InstaLensViewModel(
             }
         }
 
-        // Immediately resolve using the best available GPS coordinates (or area input / default India coordinates if emulator has no GPS fix yet)
         val lat = bestLocation?.latitude ?: 25.5941
         val lon = bestLocation?.longitude ?: 85.1376
         val effectiveArea = customAreaOverride.ifBlank { _locationState.value.areaFilterInput }
@@ -175,7 +192,8 @@ class InstaLensViewModel(
             context = context,
             lat = lat,
             lon = lon,
-            areaOverride = effectiveArea
+            areaOverride = effectiveArea,
+            genderFilter = genderFilter
         )
     }
 
@@ -184,7 +202,7 @@ class InstaLensViewModel(
             it.copy(
                 isLocationEnabled = false,
                 isTracking = false,
-                statusMessage = "लोकेशन ट्रैकिंग बंद है। अपने एरिया के Instagram IDs देखने के लिए लोकेशन चालू करें।"
+                statusMessage = "लोकेशन ट्रैकिंग बंद है। अपने एरिया के असली Instagram IDs देखने के लिए लोकेशन चालू करें।"
             )
         }
     }
@@ -193,20 +211,22 @@ class InstaLensViewModel(
         context: Context,
         lat: Double?,
         lon: Double?,
-        areaOverride: String
+        areaOverride: String,
+        genderFilter: ProfileGenderFilter
     ) {
         viewModelScope.launch {
             val info = MlAndInstagramApiClient.discoverInstagramIdsForArea(
                 context = context,
                 latitude = lat,
                 longitude = lon,
-                manualAreaOverride = areaOverride
+                manualAreaOverride = areaOverride,
+                genderFilter = genderFilter
             )
 
             repository.insertHistoryItem(
                 SearchHistoryEntity(
-                    queryOrClue = "📍 ${info.displayAddress}",
-                    searchType = "Location Area Instagram Search",
+                    queryOrClue = "📍 ${info.displayAddress} (${genderFilter.labelHindi})",
+                    searchType = "Location Real Instagram Search",
                     primaryUrl = info.areaCandidateLinks.firstOrNull()?.instagramProfileUrl ?: "",
                     candidateCount = info.areaCandidateLinks.size,
                     summaryMessage = info.statusSummary

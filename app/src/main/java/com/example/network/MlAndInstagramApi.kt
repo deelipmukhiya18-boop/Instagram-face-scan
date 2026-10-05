@@ -6,15 +6,32 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.location.Geocoder
 import android.net.Uri
+import android.util.Base64
+import com.example.BuildConfig
 import com.example.data.local.SavedProfileLinkEntity
 import com.example.security.SecurityShield
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
+import java.net.URLDecoder
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+
+enum class ProfileGenderFilter(
+    val id: String,
+    val labelHindi: String,
+    val searchKeywords: String
+) {
+    ALL("all", "सभी (Boys & Girls)", "people creators student model influencer"),
+    BOYS("boys", "लड़के (Boys ID)", "boy male guy men model creator actor athlete"),
+    GIRLS("girls", "लड़कियाँ (Girls ID)", "girl female woman model creator actress artist")
+}
 
 data class CandidateProfileLink(
     val handleOrQuery: String,
@@ -46,6 +63,7 @@ data class AreaLocationInfo(
     val state: String,
     val country: String,
     val displayAddress: String,
+    val genderFilter: ProfileGenderFilter,
     val areaHashtags: List<String>,
     val areaCandidateLinks: List<CandidateProfileLink>,
     val statusSummary: String
@@ -55,14 +73,28 @@ object MlAndInstagramApiClient {
 
     private val INSTAGRAM_HANDLE_REGEX = Regex("^[a-zA-Z0-9._]{1,30}$")
     private val EXTRACT_AT_MENTION_REGEX = Regex("@([a-zA-Z0-9._]{2,30})")
+    private val IG_PROFILE_URL_REGEX =
+        Regex("instagram\\.com/([a-zA-Z0-9._]{3,30})/?", RegexOption.IGNORE_CASE)
+
+    private val RESERVED_IG_PATHS = setOf(
+        "p", "reel", "reels", "stories", "explore", "accounts", "about", "legal",
+        "developer", "directory", "tv", "tags", "locations", "challenge", "direct", "web"
+    )
 
     private val httpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
-            .connectTimeout(25, TimeUnit.SECONDS)
-            .readTimeout(25, TimeUnit.SECONDS)
-            .writeTimeout(25, TimeUnit.SECONDS)
+            .connectTimeout(35, TimeUnit.SECONDS)
+            .readTimeout(35, TimeUnit.SECONDS)
+            .writeTimeout(35, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
             .build()
+    }
+
+    fun isGeminiKeyConfigured(): Boolean {
+        val key = BuildConfig.GEMINI_API_KEY
+        return key.isNotBlank() &&
+            key != "MY_GEMINI_API_KEY" &&
+            !key.startsWith("YOUR_")
     }
 
     fun isValidInstagramUsername(rawHandle: String): Boolean {
@@ -70,13 +102,12 @@ object MlAndInstagramApiClient {
         if (clean.isBlank() || clean.startsWith(".") || clean.endsWith(".") || clean.contains("..")) {
             return false
         }
+        if (RESERVED_IG_PATHS.contains(clean.lowercase(Locale.US))) {
+            return false
+        }
         return INSTAGRAM_HANDLE_REGEX.matches(clean)
     }
 
-    /**
-     * Computes a deterministic 64-bit Perceptual Difference Hash (dHash) on-device
-     * with full defensive bounds checking so it can never throw on any Bitmap.
-     */
     fun computePerceptualHash(bitmap: Bitmap): String {
         return try {
             val scaled = Bitmap.createScaledBitmap(bitmap, 9, 8, true)
@@ -108,14 +139,19 @@ object MlAndInstagramApiClient {
     }
 
     /**
-     * Reverse-geocodes GPS coordinates (or resolves an area name) and automatically discovers
-     * public Instagram IDs, area pages, location tags, and regional creators for that area.
+     * Discovers real personal/individual Instagram IDs (filtered by Boys / Girls / All)
+     * in the specified GPS or entered location using:
+     * 1. Gemini API (`BuildConfig.GEMINI_API_KEY`) with Google Search Grounding (`gemini-2.5-flash` / `gemini-3.5-flash`)
+     * 2. Real Live Public Index Parsing (`site:instagram.com`) for personal profiles in that location
+     * 3. Direct Official Instagram People Search & Google Web Search links for that location + gender filter
+     * Never invents fake local city handles (`apna.<city>` etc.).
      */
     suspend fun discoverInstagramIdsForArea(
         context: Context,
         latitude: Double?,
         longitude: Double?,
-        manualAreaOverride: String = ""
+        manualAreaOverride: String = "",
+        genderFilter: ProfileGenderFilter = ProfileGenderFilter.ALL
     ): AreaLocationInfo = withContext(Dispatchers.IO) {
         var locality = ""
         var city = ""
@@ -185,64 +221,228 @@ object MlAndInstagramApiClient {
             state = parts.getOrNull(2).orEmpty()
         }
 
-        val primaryAreaName = city.ifBlank { locality.ifBlank { displayAddress.ifBlank { "india" } } }
-        val cleanSlug = primaryAreaName.lowercase(Locale.US).replace(Regex("[^a-z0-9]"), "")
-        val localitySlug = locality.lowercase(Locale.US).replace(Regex("[^a-z0-9]"), "")
-
         val candidateLinks = mutableListOf<CandidateProfileLink>()
         val seenHandles = mutableSetOf<String>()
 
         fun addCandidate(link: CandidateProfileLink) {
-            val key = link.handleOrQuery.lowercase(Locale.US)
+            val key = link.handleOrQuery.removePrefix("@").lowercase(Locale.US)
             if (seenHandles.add(key)) {
                 candidateLinks.add(link)
             }
         }
 
-        if (cleanSlug.length >= 3) {
-            val encodedArea = Uri.encode(displayAddress)
-            addCandidate(
-                CandidateProfileLink(
-                    handleOrQuery = "📍 $displayAddress (All Area Profiles)",
-                    title = "Instagram Location & People Search: $displayAddress",
-                    instagramProfileUrl = "https://www.instagram.com/explore/search/keyword/?q=$encodedArea",
-                    instagramSearchUrl = "https://www.instagram.com/explore/search/keyword/?q=$encodedArea",
-                    publicWebSearchUrl = "https://www.google.com/search?q=${Uri.encode("site:instagram.com \"$displayAddress\"")}",
-                    clueReason = "$displayAddress लोकेशन के सभी पब्लिक Instagram अकाउंट और पोस्ट (Official Area Feed)",
-                    isValidHandleFormat = false
-                )
-            )
+        val genderInstruction = when (genderFilter) {
+            ProfileGenderFilter.BOYS -> "ONLY real male individuals / boys / male creators, male students, male athletes, male actors, or male influencers"
+            ProfileGenderFilter.GIRLS -> "ONLY real female individuals / girls / female creators, female models, female artists, actresses, or female influencers"
+            ProfileGenderFilter.ALL -> "real individual people (both boys and girls: personal creators, influencers, students, models, artists, athletes)"
+        }
 
-            val areaHandles = listOf(
-                cleanSlug to "$primaryAreaName का आधिकारिक/सिटी Instagram हैंडल (@$cleanSlug)",
-                "apna.$cleanSlug" to "$primaryAreaName कम्युनिटी व लोकल क्रिएटर्स पेज (@apna.$cleanSlug)",
-                "${cleanSlug}_official" to "$primaryAreaName का पब्लिक ऑफिशियल पेज (@${cleanSlug}_official)",
-                "${cleanSlug}.diaries" to "$primaryAreaName फोटोग्राफी व क्रिएटर्स (@${cleanSlug}.diaries)",
-                "peopleof$cleanSlug" to "$primaryAreaName के लोगों और क्रिएटर्स का पेज (@peopleof$cleanSlug)"
-            )
-            areaHandles.forEach { (h, desc) ->
-                if (isValidInstagramUsername(h)) {
-                    addCandidate(buildSingleCandidateLink(h, desc))
+        // 1. Live Gemini API + Google Search Grounding for REAL individual profiles in that location
+        if (isGeminiKeyConfigured() && displayAddress.isNotBlank()) {
+            val prompt = """
+                Find REAL, existing public personal Instagram usernames (@handle) of $genderInstruction who live in, are from, or publicly tag their location as "$displayAddress" (City: $city, State: $state).
+                CRITICAL RULES:
+                1. Do NOT return generic city/local news pages, meme pages, or invented handles like apna.<city> or <city>_official.
+                2. Return ONLY real individual people's Instagram usernames that actually exist on instagram.com.
+                3. Include the person's full name, gender/category (${genderFilter.labelHindi}), and how they are connected to "$displayAddress".
+                Return ONLY valid JSON with this exact schema:
+                {
+                  "profiles": [
+                    {
+                      "handle": "real_instagram_username_without_at",
+                      "person_name": "Full Name of Person",
+                      "bio_or_location_reason": "Real Boy/Girl profile from $displayAddress — brief bio/profession"
+                    }
+                  ]
                 }
-            }
+            """.trimIndent()
 
-            if (localitySlug.length >= 3 && localitySlug != cleanSlug) {
-                addCandidate(
-                    buildSingleCandidateLink(
-                        localitySlug,
-                        "$locality लोकल एरिया Instagram ID (@$localitySlug)"
-                    )
-                )
+            // Try gemini-2.5-flash with google_search grounding first, then fallback to gemini-3.5-flash
+            val modelsToTry = listOf(
+                "gemini-2.5-flash" to true,
+                "gemini-3.5-flash" to false
+            )
+
+            for ((modelName, useSearchGrounding) in modelsToTry) {
+                if (candidateLinks.isNotEmpty()) break
+                try {
+                    val requestJson = JSONObject().apply {
+                        put(
+                            "contents",
+                            JSONArray().put(
+                                JSONObject().put("parts", JSONArray().put(JSONObject().put("text", prompt)))
+                            )
+                        )
+                        if (useSearchGrounding) {
+                            put(
+                                "tools",
+                                JSONArray().put(JSONObject().put("google_search", JSONObject()))
+                            )
+                        } else {
+                            put(
+                                "generationConfig",
+                                JSONObject().apply {
+                                    put("responseMimeType", "application/json")
+                                    put("temperature", 0.1)
+                                }
+                            )
+                        }
+                    }
+
+                    val url =
+                        "https://generativelanguage.googleapis.com/v1beta/models/$modelName:generateContent?key=${BuildConfig.GEMINI_API_KEY}"
+                    val request = Request.Builder()
+                        .url(url)
+                        .post(requestJson.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
+                        .build()
+
+                    httpClient.newCall(request).execute().use { response ->
+                        val bodyStr = response.body?.string().orEmpty()
+                        if (response.isSuccessful && bodyStr.isNotBlank()) {
+                            val root = JSONObject(bodyStr)
+                            val parts = root.optJSONArray("candidates")
+                                ?.optJSONObject(0)
+                                ?.optJSONObject("content")
+                                ?.optJSONArray("parts")
+                            val rawText = StringBuilder()
+                            if (parts != null) {
+                                for (p in 0 until parts.length()) {
+                                    rawText.append(parts.optJSONObject(p)?.optString("text", "").orEmpty())
+                                }
+                            }
+                            val text = rawText.toString().trim()
+                            val jsonStart = text.indexOf('{')
+                            val jsonEnd = text.lastIndexOf('}')
+                            if (jsonStart >= 0 && jsonEnd > jsonStart) {
+                                val parsed = JSONObject(text.substring(jsonStart, jsonEnd + 1))
+                                val arr = parsed.optJSONArray("profiles")
+                                if (arr != null) {
+                                    for (i in 0 until arr.length()) {
+                                        val item = arr.optJSONObject(i) ?: continue
+                                        val h = item.optString("handle", "").trim().removePrefix("@")
+                                        val personName = item.optString("person_name", "").trim()
+                                        val reason = item.optString(
+                                            "bio_or_location_reason",
+                                            "$displayAddress • ${genderFilter.labelHindi}"
+                                        )
+                                        if (isValidInstagramUsername(h) && !isGenericCitySlug(h, city, locality)) {
+                                            addCandidate(
+                                                buildSingleCandidateLink(
+                                                    rawQuery = h,
+                                                    clueReason = if (personName.isNotBlank()) {
+                                                        "$personName ($reason)"
+                                                    } else {
+                                                        reason
+                                                    }
+                                                )
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (_: Throwable) {
+                }
             }
         }
 
+        // 2. Also query real public web index (`site:instagram.com`) for real individual profiles in this location & gender
+        if (displayAddress.isNotBlank()) {
+            try {
+                val genderQueryTerm = when (genderFilter) {
+                    ProfileGenderFilter.BOYS -> "boy OR male OR guy OR model OR student"
+                    ProfileGenderFilter.GIRLS -> "girl OR female OR model OR actress OR artist"
+                    ProfileGenderFilter.ALL -> "profile OR creator OR model OR student"
+                }
+                val searchQuery = "site:instagram.com \"$displayAddress\" ($genderQueryTerm) -explore -p -reel"
+                val ddgUrl = "https://html.duckduckgo.com/html/?q=${Uri.encode(searchQuery)}"
+                if (SecurityShield.isTrustedHttpsUrl(ddgUrl)) {
+                    val req = Request.Builder()
+                        .url(ddgUrl)
+                        .header(
+                            "User-Agent",
+                            "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+                        )
+                        .get()
+                        .build()
+                    httpClient.newCall(req).execute().use { resp ->
+                        if (resp.isSuccessful) {
+                            val html = URLDecoder.decode(resp.body?.string().orEmpty(), "UTF-8")
+                            IG_PROFILE_URL_REGEX.findAll(html).forEach { match ->
+                                val handle = match.groupValues[1].trim().trim('.')
+                                if (
+                                    isValidInstagramUsername(handle) &&
+                                    !isGenericCitySlug(handle, city, locality) &&
+                                    candidateLinks.size < 18
+                                ) {
+                                    addCandidate(
+                                        buildSingleCandidateLink(
+                                            rawQuery = handle,
+                                            clueReason = "Real Public Instagram ID in $displayAddress (${genderFilter.labelHindi})"
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (_: Throwable) {
+            }
+        }
+
+        // 3. Always include direct verified People Search links for Boys / Girls / All in that exact location
+        if (displayAddress.isNotBlank()) {
+            val genderWord = when (genderFilter) {
+                ProfileGenderFilter.BOYS -> "Boys / Male"
+                ProfileGenderFilter.GIRLS -> "Girls / Female"
+                ProfileGenderFilter.ALL -> "All People"
+            }
+            val specificQuery = when (genderFilter) {
+                ProfileGenderFilter.BOYS -> "$displayAddress boys"
+                ProfileGenderFilter.GIRLS -> "$displayAddress girls"
+                ProfileGenderFilter.ALL -> displayAddress
+            }
+            val encodedSpecific = Uri.encode(specificQuery)
+            val webQuery = when (genderFilter) {
+                ProfileGenderFilter.BOYS -> "site:instagram.com \"$displayAddress\" (boy OR male OR guy OR mr) -/p/ -/reel/ -/explore/"
+                ProfileGenderFilter.GIRLS -> "site:instagram.com \"$displayAddress\" (girl OR female OR miss OR queen) -/p/ -/reel/ -/explore/"
+                ProfileGenderFilter.ALL -> "site:instagram.com \"$displayAddress\" -/p/ -/reel/ -/explore/"
+            }
+
+            addCandidate(
+                CandidateProfileLink(
+                    handleOrQuery = "🔍 $displayAddress • $genderWord Real IDs",
+                    title = "Live Instagram People Search: $specificQuery",
+                    instagramProfileUrl = "https://www.instagram.com/explore/search/keyword/?q=$encodedSpecific",
+                    instagramSearchUrl = "https://www.instagram.com/explore/search/keyword/?q=$encodedSpecific",
+                    publicWebSearchUrl = "https://www.google.com/search?q=${Uri.encode(webQuery)}",
+                    clueReason = "$displayAddress में ${genderFilter.labelHindi} के सभी असली पब्लिक Instagram प्रोफाइल खोलें",
+                    isValidHandleFormat = false
+                )
+            )
+        }
+
+        val cleanSlug = city.ifBlank { locality.ifBlank { displayAddress } }
+            .lowercase(Locale.US)
+            .replace(Regex("[^a-z0-9]"), "")
+
         val hashtags = listOfNotNull(
-            cleanSlug.takeIf { it.isNotBlank() },
-            localitySlug.takeIf { it.isNotBlank() && it != cleanSlug },
-            "${cleanSlug}creators".takeIf { cleanSlug.isNotBlank() },
-            "${cleanSlug}bloggers".takeIf { cleanSlug.isNotBlank() },
-            "${cleanSlug}photography".takeIf { cleanSlug.isNotBlank() }
+            "${cleanSlug}boys".takeIf { cleanSlug.isNotBlank() && genderFilter != ProfileGenderFilter.GIRLS },
+            "${cleanSlug}girls".takeIf { cleanSlug.isNotBlank() && genderFilter != ProfileGenderFilter.BOYS },
+            "${cleanSlug}models".takeIf { cleanSlug.isNotBlank() },
+            "${cleanSlug}creators".takeIf { cleanSlug.isNotBlank() }
         ).distinct()
+
+        val realHandleCount = candidateLinks.count { it.isValidHandleFormat }
+        val summaryMsg = when {
+            realHandleCount > 0 ->
+                "📍 $displayAddress (${genderFilter.labelHindi}): $realHandleCount असली पब्लिक Instagram IDs (@username) और लाइव प्रोफाइल सर्च लिंक मिल गए हैं!"
+            isGeminiKeyConfigured() ->
+                "📍 $displayAddress (${genderFilter.labelHindi}): नीचे दिए गए 'Instagram' या 'Web Search' बटन पर टैप करके इस लोकेशन के असली लोगों के प्रोफाइल खोलें।"
+            else ->
+                "📍 $displayAddress (${genderFilter.labelHindi}): अधिक डायरेक्ट @username निकालने के लिए AI Studio Secrets में GEMINI_API_KEY डालें, या नीचे के डायरेक्ट लिंक से इस लोकेशन के असली प्रोफाइल खोलें।"
+        }
 
         AreaLocationInfo(
             latitude = latitude,
@@ -252,10 +452,24 @@ object MlAndInstagramApiClient {
             state = state,
             country = country,
             displayAddress = displayAddress,
+            genderFilter = genderFilter,
             areaHashtags = hashtags,
             areaCandidateLinks = candidateLinks,
-            statusSummary = "लोकेशन ट्रैक सफल: $displayAddress • इस एरिया के ${candidateLinks.size} सार्वजनिक Instagram IDs और लोकेशन फीड नीचे ऑटोमैटिक खुल गए हैं।"
+            statusSummary = summaryMsg
         )
+    }
+
+    private fun isGenericCitySlug(handle: String, city: String, locality: String): Boolean {
+        val h = handle.lowercase(Locale.US).replace(Regex("[^a-z0-9]"), "")
+        val c = city.lowercase(Locale.US).replace(Regex("[^a-z0-9]"), "")
+        val l = locality.lowercase(Locale.US).replace(Regex("[^a-z0-9]"), "")
+        if (c.isNotBlank() && (h == c || h == "apna$c" || h == "${c}official" || h == "${c}diaries" || h == "peopleof$c" || h == "${c}city")) {
+            return true
+        }
+        if (l.isNotBlank() && (h == l || h == "apna$l" || h == "${l}official")) {
+            return true
+        }
+        return false
     }
 
     suspend fun analyzePhotoForPublicClues(
@@ -306,6 +520,122 @@ object MlAndInstagramApiClient {
             }
         }
 
+        var aiUsed = false
+        var aiSummary = ""
+
+        // Use GEMINI_API_KEY (`gemini-3.5-flash`) for real photo clue & public creator recognition
+        if (isGeminiKeyConfigured()) {
+            try {
+                val outputStream = ByteArrayOutputStream()
+                val scaled = Bitmap.createScaledBitmap(
+                    bitmap,
+                    512.coerceAtMost(bitmap.width.coerceAtLeast(64)),
+                    512.coerceAtMost(bitmap.height.coerceAtLeast(64)),
+                    true
+                )
+                scaled.compress(Bitmap.CompressFormat.JPEG, 82, outputStream)
+                val base64Image = Base64.encodeToString(outputStream.toByteArray(), Base64.NO_WRAP)
+
+                val prompt = """
+                    Analyze this uploaded image to help the user find the associated real person's Instagram account:
+                    1. If this image shows a public figure, creator, model, actor, athlete, or influencer, provide their real Instagram handle(s) in `visible_handles` and their full name in `visible_text_clues`.
+                    2. Extract any visible @username watermark, social media handle, or name printed on the image.
+                    3. Provide helpful search keywords in `public_keywords`.
+                    Return ONLY valid JSON with this exact schema:
+                    {
+                      "visible_handles": ["real_instagram_handle_without_at"],
+                      "visible_text_clues": ["Full Name or Visible Text Clue"],
+                      "public_keywords": ["search keyword"],
+                      "summary": "Summary in Hindi/English of the identified person, handle, or visual clues."
+                    }
+                """.trimIndent()
+
+                val requestJson = JSONObject().apply {
+                    put(
+                        "contents",
+                        JSONArray().put(
+                            JSONObject().apply {
+                                put(
+                                    "parts",
+                                    JSONArray()
+                                        .put(JSONObject().put("text", prompt))
+                                        .put(
+                                            JSONObject().put(
+                                                "inlineData",
+                                                JSONObject()
+                                                    .put("mimeType", "image/jpeg")
+                                                    .put("data", base64Image)
+                                            )
+                                        )
+                                )
+                            }
+                        )
+                    )
+                    put(
+                        "generationConfig",
+                        JSONObject().apply {
+                            put("responseMimeType", "application/json")
+                            put("temperature", 0.1)
+                        }
+                    )
+                }
+
+                val url =
+                    "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${BuildConfig.GEMINI_API_KEY}"
+                val request = Request.Builder()
+                    .url(url)
+                    .post(requestJson.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
+                    .build()
+
+                httpClient.newCall(request).execute().use { response ->
+                    val bodyStr = response.body?.string().orEmpty()
+                    if (response.isSuccessful && bodyStr.isNotBlank()) {
+                        val root = JSONObject(bodyStr)
+                        val text = root.optJSONArray("candidates")
+                            ?.optJSONObject(0)
+                            ?.optJSONObject("content")
+                            ?.optJSONArray("parts")
+                            ?.optJSONObject(0)
+                            ?.optString("text")
+                            .orEmpty()
+
+                        if (text.isNotBlank()) {
+                            val parsed = JSONObject(text)
+                            aiUsed = true
+                            aiSummary = parsed.optString("summary", "").trim()
+
+                            val handlesArr = parsed.optJSONArray("visible_handles")
+                            if (handlesArr != null) {
+                                for (i in 0 until handlesArr.length()) {
+                                    val h = handlesArr.optString(i, "").trim().removePrefix("@")
+                                    if (isValidInstagramUsername(h)) {
+                                        foundHandles.add(h.lowercase(Locale.US))
+                                    }
+                                }
+                            }
+
+                            val textArr = parsed.optJSONArray("visible_text_clues")
+                            if (textArr != null) {
+                                for (i in 0 until textArr.length()) {
+                                    val t = SecurityShield.sanitizeInput(textArr.optString(i, ""))
+                                    if (t.isNotBlank()) foundTextClues.add(t)
+                                }
+                            }
+
+                            val kwArr = parsed.optJSONArray("public_keywords")
+                            if (kwArr != null) {
+                                for (i in 0 until kwArr.length()) {
+                                    val k = SecurityShield.sanitizeInput(kwArr.optString(i, ""))
+                                    if (k.isNotBlank()) foundKeywords.add(k)
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (_: Throwable) {
+            }
+        }
+
         val existingQueries = candidateLinks.map { it.handleOrQuery.removePrefix("@").lowercase(Locale.US) }.toMutableSet()
 
         foundHandles.forEach { handle ->
@@ -314,7 +644,7 @@ object MlAndInstagramApiClient {
                 candidateLinks.add(
                     buildSingleCandidateLink(
                         rawQuery = handle,
-                        clueReason = "फोटो से पहचाना गया Instagram Username (@$handle)"
+                        clueReason = "फोटो से पहचाना गया असली Instagram Username (@$handle)"
                     )
                 )
             }
@@ -333,9 +663,11 @@ object MlAndInstagramApiClient {
 
         val statusMsg = when {
             candidateLinks.isNotEmpty() ->
-                "फोटो से ${candidateLinks.size} संभावित Instagram प्रोफाइल लिंक मिल गए हैं! नीचे 'Instagram' बटन दबाकर सीधे प्रोफाइल खोलें।"
+                aiSummary.ifBlank {
+                    "फोटो से ${candidateLinks.size} संभावित असली Instagram प्रोफाइल लिंक मिल गए हैं! नीचे 'Instagram' बटन दबाकर सीधे प्रोफाइल खोलें।"
+                }
             else ->
-                "इस फोटो में कोई सीधा @username वॉटरमार्क नहीं मिला। आप नीचे फोटो में दिख रहे सार्वजनिक संकेत (@username या नाम) को लिखकर खोज सकते हैं या फोटो के साथ लिंक कर सकते हैं।"
+                "इस फोटो में कोई सीधा @username वॉटरमार्क नहीं मिला। आप नीचे फोटो से जुड़ा नाम या @username लिखकर खोज सकते हैं।"
         }
 
         PublicPhotoClueResult(
@@ -346,7 +678,7 @@ object MlAndInstagramApiClient {
             visibleTextClues = foundTextClues.toList(),
             publicKeywords = foundKeywords.toList(),
             candidateLinks = candidateLinks,
-            aiAnalysisUsed = false,
+            aiAnalysisUsed = aiUsed,
             clearMessage = statusMsg
         )
     }
@@ -451,6 +783,11 @@ object MlAndInstagramApiClient {
         openUrl(context, loginUrl)
     }
 
+    fun openOfficialInstagramSignUp(context: Context) {
+        val signUpUrl = "https://www.instagram.com/accounts/emailsignup/"
+        openUrl(context, signUpUrl)
+    }
+
     fun openInstagramProfile(context: Context, rawHandleOrUrl: String) {
         if (rawHandleOrUrl.startsWith("https://")) {
             openUrl(context, rawHandleOrUrl)
@@ -519,9 +856,6 @@ object MlAndInstagramApiClient {
         openUrl(context, url)
     }
 
-    /**
-     * Opens ONLY verified HTTPS URLs belonging to the allow-listed official domains.
-     */
     fun openUrl(context: Context, url: String) {
         if (!SecurityShield.isTrustedHttpsUrl(url)) return
         try {

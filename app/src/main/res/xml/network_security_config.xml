@@ -7,11 +7,13 @@
         </trust-anchors>
     </base-config>
 
-    <!-- Explicitly allow HTTPS only to official trusted domains (Instagram, Meta AI, Google, OpenStreetMap) -->
+    <!-- Explicitly allow HTTPS only to official trusted domains -->
     <domain-config cleartextTrafficPermitted="false">
         <domain includeSubdomains="true">instagram.com</domain>
         <domain includeSubdomains="true">meta.ai</domain>
         <domain includeSubdomains="true">google.com</domain>
+        <domain includeSubdomains="true">googleapis.com</domain>
+        <domain includeSubdomains="true">duckduckgo.com</domain>
         <domain includeSubdomains="true">openstreetmap.org</domain>
         <trust-anchors>
             <certificates src="system" />
