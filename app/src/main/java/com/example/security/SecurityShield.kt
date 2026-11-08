@@ -38,6 +38,7 @@ object SecurityShield {
         if (raw.isBlank()) return ""
         return raw
             .take(MAX_INPUT_LENGTH)
+            .replace(Regex("<[^>]*>"), "")
             .replace(Regex("[<>\"'`;\\\\\\x00-\\x1F]"), "")
             .trim()
     }

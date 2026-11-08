@@ -24,6 +24,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Face
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.GpsFixed
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.MyLocation
@@ -173,6 +174,7 @@ fun LocationSearchScreen(
                                         ProfileGenderFilter.ALL -> Icons.Default.People
                                         ProfileGenderFilter.BOYS -> Icons.Default.Person
                                         ProfileGenderFilter.GIRLS -> Icons.Default.Face
+                                        ProfileGenderFilter.SINGLE_GIRLS -> Icons.Default.Favorite
                                     }
                                     Icon(
                                         imageVector = icon,
@@ -415,6 +417,7 @@ fun LocationSearchScreen(
                                         val query = when (info.genderFilter) {
                                             ProfileGenderFilter.BOYS -> "${info.displayAddress} boys"
                                             ProfileGenderFilter.GIRLS -> "${info.displayAddress} girls"
+                                            ProfileGenderFilter.SINGLE_GIRLS -> "${info.displayAddress} single girls"
                                             ProfileGenderFilter.ALL -> info.displayAddress
                                         }
                                         MlAndInstagramApiClient.openInstagramLocationExplore(

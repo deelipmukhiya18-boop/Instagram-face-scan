@@ -35,13 +35,20 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material3.AssistChip
 import com.example.network.CandidateProfileLink
 import com.example.network.MlAndInstagramApiClient
 import com.example.ui.ManualSearchUiState
 import com.example.ui.theme.InstaCyan
+import com.example.ui.theme.InstaMagenta
 import com.example.ui.theme.MatchGreen
 import com.example.ui.theme.WarningAmber
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ManualSearchScreen(
     searchState: ManualSearchUiState,
@@ -104,6 +111,46 @@ fun ManualSearchScreen(
                             .fillMaxWidth()
                             .testTag("manual_username_input")
                     )
+
+                    // Quick Search Suggestions
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        AssistChip(
+                            onClick = {
+                                onQueryChange("singlegirls")
+                                onRunSearch()
+                            },
+                            label = { Text("❤️ सिंगल लड़कियाँ (@singlegirls)") },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.Favorite,
+                                    contentDescription = null,
+                                    tint = InstaMagenta,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            },
+                            modifier = Modifier.testTag("quick_search_single_girls")
+                        )
+                        AssistChip(
+                            onClick = {
+                                onQueryChange("girls")
+                                onRunSearch()
+                            },
+                            label = { Text("लड़कियाँ (@girls)") },
+                            modifier = Modifier.testTag("quick_search_girls")
+                        )
+                        AssistChip(
+                            onClick = {
+                                onQueryChange("boys")
+                                onRunSearch()
+                            },
+                            label = { Text("लड़के (@boys)") },
+                            modifier = Modifier.testTag("quick_search_boys")
+                        )
+                    }
 
                     if (searchState.queryInput.isNotBlank()) {
                         Surface(

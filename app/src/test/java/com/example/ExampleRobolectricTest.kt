@@ -43,15 +43,17 @@ class ExampleRobolectricTest {
         assertTrue(manualLinks.isNotEmpty())
         assertEquals("https://www.instagram.com/natgeo/", manualLinks.first().instagramProfileUrl)
 
-        // Verify area location Instagram discovery
+        // Verify area location Instagram discovery (including SINGLE_GIRLS filter)
         val areaInfo = MlAndInstagramApiClient.discoverInstagramIdsForArea(
             context = context,
             latitude = 25.5941,
             longitude = 85.1376,
-            manualAreaOverride = "Patna, Bihar"
+            manualAreaOverride = "Patna, Bihar",
+            genderFilter = com.example.network.ProfileGenderFilter.SINGLE_GIRLS
         )
         assertTrue(areaInfo.areaCandidateLinks.isNotEmpty())
         assertTrue(areaInfo.areaHashtags.isNotEmpty())
+        assertEquals(com.example.network.ProfileGenderFilter.SINGLE_GIRLS, areaInfo.genderFilter)
 
         // Verify blank photo without public clue produces empty candidate list and clear message (no fake match)
         val blankBmp = Bitmap.createBitmap(120, 120, Bitmap.Config.ARGB_8888)

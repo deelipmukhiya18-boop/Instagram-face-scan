@@ -30,7 +30,8 @@ enum class ProfileGenderFilter(
 ) {
     ALL("all", "सभी (Boys & Girls)", "people creators student model influencer"),
     BOYS("boys", "लड़के (Boys ID)", "boy male guy men model creator actor athlete"),
-    GIRLS("girls", "लड़कियाँ (Girls ID)", "girl female woman model creator actress artist")
+    GIRLS("girls", "लड़कियाँ (Girls ID)", "girl female woman model creator actress artist"),
+    SINGLE_GIRLS("single_girls", "सिंगल लड़कियाँ (Single Girls)", "single girl model creator bio:single status:single")
 }
 
 data class CandidateProfileLink(
@@ -234,6 +235,7 @@ object MlAndInstagramApiClient {
         val genderInstruction = when (genderFilter) {
             ProfileGenderFilter.BOYS -> "ONLY real male individuals / boys / male creators, male students, male athletes, male actors, or male influencers"
             ProfileGenderFilter.GIRLS -> "ONLY real female individuals / girls / female creators, female models, female artists, actresses, or female influencers"
+            ProfileGenderFilter.SINGLE_GIRLS -> "ONLY real female individuals / single girls / female creators, models, or students who publicly tag or mention 'single' / '#singlegirl' / 'single life' or are female creators"
             ProfileGenderFilter.ALL -> "real individual people (both boys and girls: personal creators, influencers, students, models, artists, athletes)"
         }
 
@@ -353,6 +355,7 @@ object MlAndInstagramApiClient {
                 val genderQueryTerm = when (genderFilter) {
                     ProfileGenderFilter.BOYS -> "boy OR male OR guy OR model OR student"
                     ProfileGenderFilter.GIRLS -> "girl OR female OR model OR actress OR artist"
+                    ProfileGenderFilter.SINGLE_GIRLS -> "girl (single OR \"single girl\" OR \"single life\" OR \"single model\")"
                     ProfileGenderFilter.ALL -> "profile OR creator OR model OR student"
                 }
                 val searchQuery = "site:instagram.com \"$displayAddress\" ($genderQueryTerm) -explore -p -reel"
@@ -396,17 +399,20 @@ object MlAndInstagramApiClient {
             val genderWord = when (genderFilter) {
                 ProfileGenderFilter.BOYS -> "Boys / Male"
                 ProfileGenderFilter.GIRLS -> "Girls / Female"
+                ProfileGenderFilter.SINGLE_GIRLS -> "Single Girls"
                 ProfileGenderFilter.ALL -> "All People"
             }
             val specificQuery = when (genderFilter) {
                 ProfileGenderFilter.BOYS -> "$displayAddress boys"
                 ProfileGenderFilter.GIRLS -> "$displayAddress girls"
+                ProfileGenderFilter.SINGLE_GIRLS -> "$displayAddress single girls"
                 ProfileGenderFilter.ALL -> displayAddress
             }
             val encodedSpecific = Uri.encode(specificQuery)
             val webQuery = when (genderFilter) {
                 ProfileGenderFilter.BOYS -> "site:instagram.com \"$displayAddress\" (boy OR male OR guy OR mr) -/p/ -/reel/ -/explore/"
                 ProfileGenderFilter.GIRLS -> "site:instagram.com \"$displayAddress\" (girl OR female OR miss OR queen) -/p/ -/reel/ -/explore/"
+                ProfileGenderFilter.SINGLE_GIRLS -> "site:instagram.com \"$displayAddress\" (girl OR female) (single OR \"single girl\" OR \"singlelife\") -/p/ -/reel/ -/explore/"
                 ProfileGenderFilter.ALL -> "site:instagram.com \"$displayAddress\" -/p/ -/reel/ -/explore/"
             }
 
@@ -428,8 +434,12 @@ object MlAndInstagramApiClient {
             .replace(Regex("[^a-z0-9]"), "")
 
         val hashtags = listOfNotNull(
-            "${cleanSlug}boys".takeIf { cleanSlug.isNotBlank() && genderFilter != ProfileGenderFilter.GIRLS },
-            "${cleanSlug}girls".takeIf { cleanSlug.isNotBlank() && genderFilter != ProfileGenderFilter.BOYS },
+            "${cleanSlug}boys".takeIf { cleanSlug.isNotBlank() && (genderFilter == ProfileGenderFilter.BOYS || genderFilter == ProfileGenderFilter.ALL) },
+            "${cleanSlug}girls".takeIf { cleanSlug.isNotBlank() && (genderFilter == ProfileGenderFilter.GIRLS || genderFilter == ProfileGenderFilter.SINGLE_GIRLS || genderFilter == ProfileGenderFilter.ALL) },
+            "${cleanSlug}singlegirls".takeIf { cleanSlug.isNotBlank() && (genderFilter == ProfileGenderFilter.SINGLE_GIRLS || genderFilter == ProfileGenderFilter.ALL) },
+            "${cleanSlug}singles".takeIf { cleanSlug.isNotBlank() && (genderFilter == ProfileGenderFilter.SINGLE_GIRLS || genderFilter == ProfileGenderFilter.ALL) },
+            "singlegirls".takeIf { genderFilter == ProfileGenderFilter.SINGLE_GIRLS },
+            "singlelife".takeIf { genderFilter == ProfileGenderFilter.SINGLE_GIRLS },
             "${cleanSlug}models".takeIf { cleanSlug.isNotBlank() },
             "${cleanSlug}creators".takeIf { cleanSlug.isNotBlank() }
         ).distinct()
